@@ -1,18 +1,20 @@
 [build]
-target = "riscv32imac-esp-espidf"
+target = "riscv32imac-unknown-none-elf"
 
-[target.riscv32imac-esp-espidf]
-linker = "ldproxy"
+[target.riscv32imac-unknown-none-elf]
 runner = "espflash flash --monitor" # Select this runner for espflash v3.x.x
-rustflags = [ "--cfg",  "espidf_time64"] # Extending time_t for ESP IDF 5: https://github.com/esp-rs/rust/issues/110
+rustflags = [
+  "--cfg",
+  "espidf_time64",
+  "-C",
+  "link-arg=-Tlinkall.x",
+  "-C",
+  "force-frame-pointers",
+] # Extending time_t for ESP IDF 5: https://github.com/esp-rs/rust/issues/110
 
 [unstable]
-build-std = ["std", "panic_abort"]
+build-std = ["alloc", "core"]
 
 [env]
-MCU="esp32c6"
-# Note: this variable is not used by the pio builder (`cargo build --features pio`)
+MCU = "esp32c6"
 ESP_IDF_VERSION = "v5.2.2"
-
-# Workaround for https://github.com/esp-rs/esp-idf-template/issues/174 
-CRATE_CC_NO_DEFAULTS = "1"

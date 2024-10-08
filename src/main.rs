@@ -1,36 +1,59 @@
-use esp_idf_hal::gpio::*;
-use anyhow::{Result};
-use esp_idf_hal::{
-    delay::FreeRtos,
-    prelude::Peripherals,
-    rmt::{config::TransmitConfig, TxRmtDriver},
-};
+//! WiFi sniffer example
+//!
+//! Sniffs for beacon frames.
+
+//% FEATURES: esp-wifi esp-wifi/wifi-default esp-wifi/wifi esp-wifi/utils esp-wifi/sniffer
+//% CHIPS: esp32 esp32s2 esp32s3 esp32c2 esp32c3 esp32c6
+
+#![no_std]
+#![no_main]
+#![allow(incomplete_features)]
+#![feature(
+    iter_collect_into,
+    iter_array_chunks,
+    array_chunks,
+    generic_const_exprs
+)]
 
 mod led;
+mod wifi;
 
-pub fn main() -> Result<()> {
-    esp_idf_hal::sys::link_patches();
+extern crate alloc;
 
-    let peripherals = Peripherals::take()?;
+use esp_alloc as _;
+use esp_backtrace as _;
+use esp_hal::{
+    gpio::Io,
+    prelude::*,
+    rmt::{Rmt, TxChannelConfig},
+    rng::Rng,
+    timer::{timg::TimerGroup, AnyTimer, PeriodicTimer},
+};
+use led::start_leds;
+use wifi::start_wifi;
 
-    // Turn on power to the LED
-    let mut led_power_pin = PinDriver::output(peripherals.pins.gpio20)?;
-    led_power_pin.set_high()?;
+#[entry]
+fn main() -> ! {
+    esp_alloc::heap_allocator!(72 * 1024);
+    esp_println::logger::init_logger_from_env();
+    let peripherals = esp_hal::init({
+        let mut config = esp_hal::Config::default();
+        config.cpu_clock = CpuClock::max();
+        config
+    });
 
-    // Onboard RGB LED pin
-    let led = peripherals.pins.gpio9;
-    let channel = peripherals.rmt.channel0;
-    let config = TransmitConfig::new().clock_divider(1);
-    let mut tx = TxRmtDriver::new(channel, led, &config)?;
+    let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
+    let rmt = Rmt::new(peripherals.RMT, 80.MHz()).unwrap();
 
-    // 3 seconds white at 10% brightness
-    led::neopixel(led::Rgb::new(25, 25, 25), &mut tx)?;
-    FreeRtos::delay_ms(3000);
+    start_leds(io, rmt);
 
-    // infinite rainbow loop at 20% brightness
-    (0..360).cycle().try_for_each(|hue| {
-        FreeRtos::delay_ms(10);
-        let rgb = led::Rgb::from_hsv(hue, 100, 20)?;
-        led::neopixel(rgb, &mut tx)
-    })
+    let timg0 = TimerGroup::new(peripherals.TIMG0);
+    let timer: AnyTimer = timg0.timer0.into();
+    let rng = Rng::new(peripherals.RNG);
+    let radio_clock = peripherals.RADIO_CLK;
+    let wifi = peripherals.WIFI;
+
+    start_wifi(timer, wifi, rng, radio_clock);
+
+    loop {}
 }

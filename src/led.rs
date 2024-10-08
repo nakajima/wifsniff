@@ -1,51 +1,151 @@
-use anyhow::{bail, Result};
-use esp_idf_hal::gpio::*;
-use esp_idf_hal::{
-    delay::FreeRtos,
-    prelude::Peripherals,
-    rmt::{config::TransmitConfig, FixedLengthSignal, PinState, Pulse, TxRmtDriver},
-};
-use std::time::Duration;
+use core::iter::once;
 
-pub fn neopixel(rgb: Rgb, tx: &mut TxRmtDriver) -> Result<()> {
-    let color: u32 = rgb.into();
-    let ticks_hz = tx.counter_clock()?;
-    let (t0h, t0l, t1h, t1l) = (
-        Pulse::new_with_duration(ticks_hz, PinState::High, &Duration::from_nanos(350))?,
-        Pulse::new_with_duration(ticks_hz, PinState::Low, &Duration::from_nanos(800))?,
-        Pulse::new_with_duration(ticks_hz, PinState::High, &Duration::from_nanos(700))?,
-        Pulse::new_with_duration(ticks_hz, PinState::Low, &Duration::from_nanos(600))?,
-    );
-    let mut signal = FixedLengthSignal::<24>::new();
-    for i in (0..24).rev() {
-        let p = 2_u32.pow(i);
-        let bit: bool = p & color != 0;
-        let (high_pulse, low_pulse) = if bit { (t1h, t1l) } else { (t0h, t0l) };
-        signal.set(23 - i as usize, &(high_pulse, low_pulse))?;
-    }
-    tx.start_blocking(&signal)?;
-    Ok(())
+use esp_backtrace as _;
+use esp_hal::{
+    delay::Delay,
+    gpio::{Io, Output, OutputPin},
+    peripheral::Peripheral,
+    peripherals::Peripherals,
+    prelude::*,
+    rmt::{PulseCode, Rmt, TxChannel, TxChannelConfig, TxChannelCreator},
+    Blocking,
+};
+use esp_println::println;
+
+const PULSES_PER_LED: usize = 24;
+const CLOCK_MHZ: u32 = 80;
+const T0H_NS: u32 = 350;
+const T0L_NS: u32 = 800;
+const T1H_NS: u32 = 700;
+const T1L_NS: u32 = 600;
+
+const T0: PulseCode = PulseCode {
+    level1: true,
+    length1: (T0H_NS * CLOCK_MHZ / 1000) as u16,
+    level2: false,
+    length2: (T0L_NS * CLOCK_MHZ / 1000) as u16,
+};
+const T1: PulseCode = PulseCode {
+    level1: true,
+    length1: (T1H_NS * CLOCK_MHZ / 1000) as u16,
+    level2: false,
+    length2: (T1L_NS * CLOCK_MHZ / 1000) as u16,
+};
+
+pub fn start_leds(io: Io, rmt: Rmt<Blocking>) {
+    println!("starting LEDs");
+    _ = Output::new_typed(io.pins.gpio20, esp_hal::gpio::Level::High);
+    let delay = Delay::new();
+
+    println!("starting cycle");
+    let mut leds = NeoPixelDriver::<1, _>::new(rmt.channel0, io.pins.gpio9);
+    (0..360).cycle().for_each(|hue| {
+        println!("Hue: {}", hue);
+        leds.write([Color::hsv(hue, 100, 20)]).unwrap();
+        delay.delay_nanos(10_000_000);
+    });
+
+    unreachable!();
 }
 
-pub struct Rgb {
+struct NeoPixelDriver<const LED_COUNT: usize, TX: TxChannel>
+where
+    [(); LED_COUNT * PULSES_PER_LED]:,
+{
+    channel: Option<TX>,
+    buffer: [u32; LED_COUNT * PULSES_PER_LED],
+}
+
+impl<'pin, const LED_COUNT: usize, TX: TxChannel> NeoPixelDriver<LED_COUNT, TX>
+where
+    [(); LED_COUNT * PULSES_PER_LED]:,
+{
+    pub fn new<C, O>(channel: C, pin: impl Peripheral<P = O> + 'pin) -> Self
+    where
+        O: OutputPin + 'pin,
+        C: TxChannelCreator<'pin, TX, O>,
+    {
+        let tx_config = TxChannelConfig {
+            clk_divider: 1,
+            ..TxChannelConfig::default()
+        };
+        let channel = channel.configure(pin, tx_config).unwrap();
+
+        Self {
+            channel: Some(channel),
+            buffer: [0; LED_COUNT * PULSES_PER_LED],
+        }
+    }
+
+    pub fn write<I>(&mut self, iterator: I) -> Result<(), esp_hal::rmt::Error>
+    where
+        I: IntoIterator<Item = Color>,
+    {
+        let mut channel = self.channel.take().unwrap();
+        let mut chunks = iterator.into_iter().array_chunks::<LED_COUNT>();
+        for chunk in chunks.by_ref() {
+            for (code, color) in self
+                .buffer
+                .array_chunks_mut::<PULSES_PER_LED>()
+                .zip(chunk.into_iter())
+            {
+                color.write_pulses(code);
+            }
+            // info!("Sending chunk");
+            match channel.transmit(&self.buffer).wait() {
+                Ok(ch) => channel = ch,
+                Err((err, ch)) => {
+                    self.channel = Some(ch);
+                    log::error!("Error: {:?}", err);
+                    return Err(err);
+                }
+            };
+        }
+        if let Some(color) = chunks.into_remainder() {
+            self.buffer.fill(PulseCode::default().into());
+            for (code, color) in self
+                .buffer
+                .array_chunks_mut::<PULSES_PER_LED>()
+                .zip(color.into_iter())
+            {
+                color.write_pulses(code);
+            }
+            // info!("Sending remainder");
+            channel = channel
+                .transmit(&self.buffer)
+                .wait()
+                .map_err(|error| error.0)?;
+        }
+        self.channel = Some(channel);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Default, Debug)]
+struct Color {
     r: u8,
     g: u8,
     b: u8,
 }
 
-impl Rgb {
-    pub fn new(r: u8, g: u8, b: u8) -> Self {
+impl Color {
+    pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
-    /// Converts hue, saturation, value to RGB
-    pub fn from_hsv(h: u32, s: u32, v: u32) -> Result<Self> {
+
+    pub fn hsv(h: u32, s: u32, v: u32) -> Self {
         if h > 360 || s > 100 || v > 100 {
-            bail!("The given HSV values are not in valid range");
+            log::error!("Invalid HSV values");
+            panic!("Invalid HSV values");
         }
         let s = s as f64 / 100.0;
         let v = v as f64 / 100.0;
         let c = s * v;
-        let x = c * (1.0 - (((h as f64 / 60.0) % 2.0) - 1.0).abs());
+        let mut x = ((h as f64 / 60.0) % 2.0) - 1.0;
+        if x < 0.0 {
+            x = -x
+        };
+        let x = c * (1.0 - x);
         let m = v - c;
         let (r, g, b) = match h {
             0..=59 => (c, x, 0.0),
@@ -55,22 +155,21 @@ impl Rgb {
             240..=299 => (x, 0.0, c),
             _ => (c, 0.0, x),
         };
-        Ok(Self {
+        Self {
             r: ((r + m) * 255.0) as u8,
             g: ((g + m) * 255.0) as u8,
             b: ((b + m) * 255.0) as u8,
-        })
+        }
     }
-}
 
-impl From<Rgb> for u32 {
-    /// Convert RGB to u32 color value
-    ///
-    /// e.g. rgb: (1,2,4)
-    /// G        R        B
-    /// 7      0 7      0 7      0
-    /// 00000010 00000001 00000100
-    fn from(rgb: Rgb) -> Self {
-        ((rgb.r as u32) << 16) | ((rgb.g as u32) << 8) | rgb.b as u32
+    pub fn write_pulses(&self, buf: &mut [u32; PULSES_PER_LED]) {
+        const POSITIONS: [u8; 8] = [128, 64, 32, 16, 8, 4, 2, 1];
+        let channels = [self.g, self.r, self.b];
+        for (idx_channel, channel) in channels.iter().enumerate() {
+            for (idx_position, position) in POSITIONS.iter().enumerate() {
+                buf[POSITIONS.len() * idx_channel + idx_position] =
+                    (if channel & position == 0 { T0 } else { T1 }).into();
+            }
+        }
     }
 }
