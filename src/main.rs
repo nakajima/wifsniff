@@ -15,8 +15,10 @@
     generic_const_exprs
 )]
 
+mod battery;
 mod led;
 mod wifi;
+mod storage;
 
 extern crate alloc;
 
@@ -24,21 +26,32 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
+use esp_hal::i2c::I2C;
 use esp_hal::timer::timg::TimerGroup;
+use esp_hal::Async;
 use esp_hal::{gpio::Io, prelude::*, rmt::Rmt, rng::Rng, timer::AnyTimer};
 use esp_println::println;
 use led::start_leds;
 use wifi::start_wifi;
 
+#[embassy_executor::task]
+async fn start_battery(i2c: I2C<'static, esp_hal::peripherals::I2C0, Async>) {
+    let mut battery = battery::Max17048::new(i2c, 0x36).await;
+    loop {
+        let soc = match battery.soc().await {
+            Ok(soc) => println!("Battery is at {}", soc),
+            Err(e) => println!("Error getting battery: {:?}", e),
+        };
+
+        Timer::after(Duration::from_secs(10)).await;
+    }
+}
+
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
     esp_alloc::heap_allocator!(72 * 1024);
     esp_println::logger::init_logger_from_env();
-    let peripherals = esp_hal::init({
-        let mut config = esp_hal::Config::default();
-        config.cpu_clock = CpuClock::max();
-        config
-    });
+    let peripherals = esp_hal::init(esp_hal::Config::default());
 
     let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
     let rmt = Rmt::new_async(peripherals.RMT, 80.MHz()).unwrap();
@@ -53,13 +66,21 @@ async fn main(spawner: Spawner) {
     let timer1: AnyTimer = timg1.timer0.into();
     esp_hal_embassy::init(timer1);
 
+    storage::store();
+
     println!("spawning wifi task");
     spawner
         .spawn(start_wifi(timer, wifi, rng, radio_clock))
         .unwrap();
 
     println!("spawning LED task");
-    spawner.spawn(start_leds(io, rmt)).unwrap();
+    spawner
+        .spawn(start_leds(io.pins.gpio20, io.pins.gpio9, rmt))
+        .unwrap();
+
+    let i2c0 = I2C::new_async(peripherals.I2C0, io.pins.gpio19, io.pins.gpio18, 400.kHz());
+    println!("spawning battery task");
+    spawner.spawn(start_battery(i2c0)).unwrap();
 
     loop {
         Timer::after(Duration::from_secs(1)).await;

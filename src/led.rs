@@ -1,7 +1,7 @@
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::{
-    gpio::{Io, Output, OutputPin},
+    gpio::{GpioPin, Output, OutputPin},
     peripheral::Peripheral,
     rmt::{asynch::TxChannelAsync, PulseCode, Rmt, TxChannelConfig, TxChannelCreatorAsync},
     Async,
@@ -29,12 +29,12 @@ const T1: PulseCode = PulseCode {
 };
 
 #[embassy_executor::task]
-pub async fn start_leds(io: Io, rmt: Rmt<'static, Async>) {
+pub async fn start_leds(power_pin: GpioPin<20>, led_pin: GpioPin<9>, rmt: Rmt<'static, Async>) {
     println!("starting LEDs");
-    _ = Output::new_typed(io.pins.gpio20, esp_hal::gpio::Level::High);
+    _ = Output::new_typed(power_pin, esp_hal::gpio::Level::High);
 
     println!("starting cycle");
-    let mut leds = NeoPixelDriver::<1, _>::new(rmt.channel0, io.pins.gpio9);
+    let mut leds = NeoPixelDriver::<1, _>::new(rmt.channel0, led_pin);
     let mut hue = 0;
     loop {
         leds.write([Color::hsv(hue, 100, 10)]).await.unwrap();
