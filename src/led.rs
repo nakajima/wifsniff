@@ -1,14 +1,10 @@
-use core::iter::once;
-
+use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::{
-    delay::Delay,
     gpio::{Io, Output, OutputPin},
     peripheral::Peripheral,
-    peripherals::Peripherals,
-    prelude::*,
-    rmt::{PulseCode, Rmt, TxChannel, TxChannelConfig, TxChannelCreator},
-    Blocking,
+    rmt::{asynch::TxChannelAsync, PulseCode, Rmt, TxChannelConfig, TxChannelCreatorAsync},
+    Async,
 };
 use esp_println::println;
 
@@ -32,23 +28,22 @@ const T1: PulseCode = PulseCode {
     length2: (T1L_NS * CLOCK_MHZ / 1000) as u16,
 };
 
-pub fn start_leds(io: Io, rmt: Rmt<Blocking>) {
+#[embassy_executor::task]
+pub async fn start_leds(io: Io, rmt: Rmt<'static, Async>) {
     println!("starting LEDs");
     _ = Output::new_typed(io.pins.gpio20, esp_hal::gpio::Level::High);
-    let delay = Delay::new();
 
     println!("starting cycle");
     let mut leds = NeoPixelDriver::<1, _>::new(rmt.channel0, io.pins.gpio9);
-    (0..360).cycle().for_each(|hue| {
-        println!("Hue: {}", hue);
-        leds.write([Color::hsv(hue, 100, 20)]).unwrap();
-        delay.delay_nanos(10_000_000);
-    });
-
-    unreachable!();
+    let mut hue = 0;
+    loop {
+        leds.write([Color::hsv(hue, 100, 10)]).await.unwrap();
+        Timer::after(Duration::from_millis(10)).await;
+        hue = (hue + 1) % 360;
+    }
 }
 
-struct NeoPixelDriver<const LED_COUNT: usize, TX: TxChannel>
+struct NeoPixelDriver<const LED_COUNT: usize, TX: TxChannelAsync>
 where
     [(); LED_COUNT * PULSES_PER_LED]:,
 {
@@ -56,14 +51,14 @@ where
     buffer: [u32; LED_COUNT * PULSES_PER_LED],
 }
 
-impl<'pin, const LED_COUNT: usize, TX: TxChannel> NeoPixelDriver<LED_COUNT, TX>
+impl<'pin, const LED_COUNT: usize, TX: TxChannelAsync> NeoPixelDriver<LED_COUNT, TX>
 where
     [(); LED_COUNT * PULSES_PER_LED]:,
 {
     pub fn new<C, O>(channel: C, pin: impl Peripheral<P = O> + 'pin) -> Self
     where
         O: OutputPin + 'pin,
-        C: TxChannelCreator<'pin, TX, O>,
+        C: TxChannelCreatorAsync<'pin, TX, O>,
     {
         let tx_config = TxChannelConfig {
             clk_divider: 1,
@@ -77,7 +72,7 @@ where
         }
     }
 
-    pub fn write<I>(&mut self, iterator: I) -> Result<(), esp_hal::rmt::Error>
+    pub async fn write<I>(&mut self, iterator: I) -> Result<(), esp_hal::rmt::Error>
     where
         I: IntoIterator<Item = Color>,
     {
@@ -92,14 +87,7 @@ where
                 color.write_pulses(code);
             }
             // info!("Sending chunk");
-            match channel.transmit(&self.buffer).wait() {
-                Ok(ch) => channel = ch,
-                Err((err, ch)) => {
-                    self.channel = Some(ch);
-                    log::error!("Error: {:?}", err);
-                    return Err(err);
-                }
-            };
+            channel.transmit(&self.buffer).await.unwrap();
         }
         if let Some(color) = chunks.into_remainder() {
             self.buffer.fill(PulseCode::default().into());
@@ -110,11 +98,7 @@ where
             {
                 color.write_pulses(code);
             }
-            // info!("Sending remainder");
-            channel = channel
-                .transmit(&self.buffer)
-                .wait()
-                .map_err(|error| error.0)?;
+            channel.transmit(&self.buffer).await.unwrap()
         }
         self.channel = Some(channel);
         Ok(())

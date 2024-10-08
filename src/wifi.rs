@@ -20,7 +20,8 @@ use ieee80211::{match_frames, mgmt_frame::BeaconFrame};
 
 static KNOWN_SSIDS: Mutex<RefCell<BTreeSet<String>>> = Mutex::new(RefCell::new(BTreeSet::new()));
 
-pub fn start_wifi(timer: AnyTimer, wifi: WIFI, rng: Rng, radio_clock: RADIO_CLK) {
+#[embassy_executor::task]
+pub async fn start_wifi(timer: AnyTimer, wifi: WIFI, rng: Rng, radio_clock: RADIO_CLK) {
     // let peripherals = esp_hal::init({
     //     let mut config = esp_hal::Config::default();
     //     config.cpu_clock = CpuClock::max();
