@@ -17,8 +17,8 @@
 
 mod battery;
 mod led;
-mod wifi;
 mod storage;
+mod wifi;
 
 extern crate alloc;
 
@@ -43,7 +43,7 @@ async fn start_battery(i2c: I2C<'static, esp_hal::peripherals::I2C0, Async>) {
             Err(e) => println!("Error getting battery: {:?}", e),
         };
 
-        Timer::after(Duration::from_secs(10)).await;
+        Timer::after(Duration::from_secs(60)).await;
     }
 }
 
@@ -66,8 +66,6 @@ async fn main(spawner: Spawner) {
     let timer1: AnyTimer = timg1.timer0.into();
     esp_hal_embassy::init(timer1);
 
-    storage::store();
-
     println!("spawning wifi task");
     spawner
         .spawn(start_wifi(timer, wifi, rng, radio_clock))
@@ -83,7 +81,8 @@ async fn main(spawner: Spawner) {
     spawner.spawn(start_battery(i2c0)).unwrap();
 
     loop {
-        Timer::after(Duration::from_secs(1)).await;
-        println!("tick");
+        let mut store = storage::Store::new();
+        store.entries();
+        Timer::after(Duration::from_secs(10)).await;
     }
 }

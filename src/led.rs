@@ -113,10 +113,6 @@ struct Color {
 }
 
 impl Color {
-    pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b }
-    }
-
     pub fn hsv(h: u32, s: u32, v: u32) -> Self {
         if h > 360 || s > 100 || v > 100 {
             log::error!("Invalid HSV values");

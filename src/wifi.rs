@@ -9,25 +9,24 @@ use alloc::{
 };
 use critical_section::Mutex;
 use esp_hal::{
-    clock::CpuClock,
-    peripherals::{Peripherals, RADIO_CLK, WIFI},
+    peripherals::{RADIO_CLK, WIFI},
     rng::Rng,
-    timer::{timg::TimerGroup, AnyTimer, PeriodicTimer},
+    timer::{AnyTimer, PeriodicTimer},
 };
 use esp_println::println;
-use esp_wifi::{initialize, wifi, EspWifiInitFor};
+use esp_wifi::{
+    initialize,
+    wifi::{self, PromiscuousPkt},
+    EspWifiInitFor,
+};
 use ieee80211::{match_frames, mgmt_frame::BeaconFrame};
+
+use crate::storage;
 
 static KNOWN_SSIDS: Mutex<RefCell<BTreeSet<String>>> = Mutex::new(RefCell::new(BTreeSet::new()));
 
 #[embassy_executor::task]
 pub async fn start_wifi(timer: AnyTimer, wifi: WIFI, rng: Rng, radio_clock: RADIO_CLK) {
-    // let peripherals = esp_hal::init({
-    //     let mut config = esp_hal::Config::default();
-    //     config.cpu_clock = CpuClock::max();
-    //     config
-    // });
-
     let timer = PeriodicTimer::new(timer);
     let init = initialize(EspWifiInitFor::Wifi, timer, rng, radio_clock).unwrap();
 
@@ -37,19 +36,32 @@ pub async fn start_wifi(timer: AnyTimer, wifi: WIFI, rng: Rng, radio_clock: RADI
 
     let mut sniffer = controller.take_sniffer().unwrap();
     sniffer.set_promiscuous_mode(true).unwrap();
-    sniffer.set_receive_cb(|packet| {
-        let _ = match_frames! {
-            packet.data,
-            beacon = BeaconFrame => {
-                let Some(ssid) = beacon.ssid() else {
-                    return;
-                };
-                if critical_section::with(|cs| {
-                    KNOWN_SSIDS.borrow_ref_mut(cs).insert(ssid.to_string())
-                }) {
-                    println!("Found new AP with SSID: {ssid}");
+    sniffer.set_receive_cb(callback);
+}
+
+fn callback(packet: PromiscuousPkt<'_>) {
+    let _ = match_frames! {
+        packet.data,
+        beacon = BeaconFrame => {
+            let Some(ssid) = beacon.ssid() else {
+                return;
+            };
+
+            if critical_section::with(|cs| {
+                if KNOWN_SSIDS.borrow_ref_mut(cs).insert(ssid.to_string()) && ssid.to_string() != "" {
+                    let mut storage = storage::Store::new();
+                    let byte_string = ssid.to_string();
+                    let bytes = byte_string.as_bytes();
+                    storage.append(bytes);
+                    return true;
+                } else {
+                    return false;
                 }
+
+
+            }) {
+                println!("Found new AP with SSID: {ssid}");
             }
-        };
-    });
+        }
+    };
 }
