@@ -2,7 +2,7 @@
 target = "riscv32imac-unknown-none-elf"
 
 [target.riscv32imac-unknown-none-elf]
-runner = "espflash flash --monitor" # Select this runner for espflash v3.x.x
+runner = "espflash flash --monitor --port /dev/cu.usbmodem111301" # Select this runner for espflash v3.x.x
 rustflags = [
   "--cfg",
   "espidf_time64",

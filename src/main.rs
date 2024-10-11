@@ -7,6 +7,7 @@
 
 #![no_std]
 #![no_main]
+#![feature(impl_trait_in_assoc_type)]
 #![allow(incomplete_features)]
 #![feature(
     iter_collect_into,
@@ -15,46 +16,53 @@
     generic_const_exprs
 )]
 
+mod LED;
 mod battery;
-mod led;
+mod smartled;
 mod storage;
 mod wifi;
 
 extern crate alloc;
 
-use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
+use esp_hal::gpio::{Input, Io, Output, WakeEvent};
 use esp_hal::i2c::I2C;
+use esp_hal::prelude::*;
+use esp_hal::rmt::Rmt;
+use esp_hal::rng::Rng;
 use esp_hal::timer::timg::TimerGroup;
+use esp_hal::timer::AnyTimer;
 use esp_hal::Async;
-use esp_hal::{gpio::Io, prelude::*, rmt::Rmt, rng::Rng, timer::AnyTimer};
 use esp_println::println;
-use led::start_leds;
+use smart_leds::hsv::{hsv2rgb, Hsv};
+use smart_leds::RGB8;
+use smartled::SmartLedsAdapter;
 use wifi::start_wifi;
 
 #[embassy_executor::task]
 async fn start_battery(i2c: I2C<'static, esp_hal::peripherals::I2C0, Async>) {
     let mut battery = battery::Max17048::new(i2c, 0x36).await;
     loop {
-        let soc = match battery.soc().await {
+        _ = match battery.soc().await {
             Ok(soc) => println!("Battery is at {}", soc),
             Err(e) => println!("Error getting battery: {:?}", e),
         };
 
-        Timer::after(Duration::from_secs(60)).await;
+        Timer::after(Duration::from_secs(30)).await;
     }
 }
 
 #[esp_hal_embassy::main]
-async fn main(spawner: Spawner) {
-    esp_alloc::heap_allocator!(72 * 1024);
+#[entry]
+async fn main(spawner: embassy_executor::Spawner) {
+    esp_alloc::heap_allocator!(92 * 1024);
     esp_println::logger::init_logger_from_env();
+
     let peripherals = esp_hal::init(esp_hal::Config::default());
 
-    let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
-    let rmt = Rmt::new_async(peripherals.RMT, 80.MHz()).unwrap();
+    let rmt = Rmt::new(peripherals.RMT, 80.MHz()).unwrap();
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let timer: AnyTimer = timg0.timer0.into();
@@ -66,23 +74,47 @@ async fn main(spawner: Spawner) {
     let timer1: AnyTimer = timg1.timer0.into();
     esp_hal_embassy::init(timer1);
 
-    println!("spawning wifi task");
-    spawner
-        .spawn(start_wifi(timer, wifi, rng, radio_clock))
-        .unwrap();
+    let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
+    _ = Output::new(io.pins.gpio20, esp_hal::gpio::Level::High);
 
-    println!("spawning LED task");
-    spawner
-        .spawn(start_leds(io.pins.gpio20, io.pins.gpio9, rmt))
-        .unwrap();
+    let rmt_buffer = smartLedBuffer!(1);
+    let mut led = SmartLedsAdapter::new(rmt.channel0, io.pins.gpio9, rmt_buffer);
+
+    for _ in 0..10 {
+        LED::fade_in(
+            &mut led,
+            RGB8 {
+                r: 0,
+                g: 120,
+                b: 255,
+            },
+            10,
+        )
+        .await;
+
+        Timer::after(Duration::from_secs(1)).await;
+
+        LED::fade_out(&mut led).await;
+
+        Timer::after(Duration::from_secs(1)).await;
+    }
 
     let i2c0 = I2C::new_async(peripherals.I2C0, io.pins.gpio19, io.pins.gpio18, 400.kHz());
     println!("spawning battery task");
     spawner.spawn(start_battery(i2c0)).unwrap();
 
+    let mut button = Input::new(io.pins.gpio15, esp_hal::gpio::Pull::Down);
+    button.wakeup_enable(true, WakeEvent::HighLevel);
+    Timer::after(Duration::from_secs(1)).await;
+    // println!("spawning wifi task");
+
+    spawner
+        .spawn(start_wifi(timer, wifi, rng, radio_clock, peripherals.LPWR))
+        .unwrap();
+
     loop {
-        let mut store = storage::Store::new();
-        store.entries();
-        Timer::after(Duration::from_secs(10)).await;
+        button.wait_for_rising_edge().await;
+        println!("button pressed!");
+        Timer::after(Duration::from_millis(100)).await;
     }
 }
