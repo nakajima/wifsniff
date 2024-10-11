@@ -80,24 +80,16 @@ async fn main(spawner: embassy_executor::Spawner) {
     let rmt_buffer = smartLedBuffer!(1);
     let mut led = SmartLedsAdapter::new(rmt.channel0, io.pins.gpio9, rmt_buffer);
 
-    for _ in 0..10 {
-        LED::fade_in(
-            &mut led,
-            RGB8 {
-                r: 0,
-                g: 120,
-                b: 255,
-            },
-            10,
-        )
-        .await;
-
-        Timer::after(Duration::from_secs(1)).await;
-
-        LED::fade_out(&mut led).await;
-
-        Timer::after(Duration::from_secs(1)).await;
-    }
+    LED::fade_in(
+        &mut led,
+        RGB8 {
+            r: 0,
+            g: 120,
+            b: 255,
+        },
+        10,
+    )
+    .await;
 
     let i2c0 = I2C::new_async(peripherals.I2C0, io.pins.gpio19, io.pins.gpio18, 400.kHz());
     println!("spawning battery task");

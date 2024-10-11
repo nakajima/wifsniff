@@ -12,7 +12,7 @@ const FLASH_START: u32 = 0x9000;
 pub struct Store {
     storage: FlashStorage,
     cursor: u32,
-    pub capacity: usize,
+    capacity: usize,
 }
 
 impl Store {
