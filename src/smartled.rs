@@ -20,7 +20,7 @@
 //!
 //! ## Feature Flags
 
-use core::{fmt::Debug, slice::IterMut};
+use core::slice::IterMut;
 
 use esp_hal::{
     clock::Clocks,
@@ -39,7 +39,6 @@ const SK68XX_T1L_NS: u32 = SK68XX_CODE_PERIOD - SK68XX_T1H_NS;
 /// All types of errors that can happen during the conversion and transmission
 /// of LED commands
 #[derive(Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum LedAdapterError {
     /// Raised in the event that the provided data container is not large enough
     BufferSizeExceeded,
