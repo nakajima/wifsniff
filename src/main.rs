@@ -16,8 +16,8 @@
     generic_const_exprs
 )]
 
-mod leds;
-mod smartled;
+mod bluetooth;
+mod lights;
 mod storage;
 mod wifi;
 
@@ -26,17 +26,15 @@ extern crate alloc;
 use embassy_time::{Duration, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
-use esp_hal::gpio::{GpioPin, Input, Io, Output, Pull};
+use esp_hal::gpio::{GpioPin, Input, Io, Level, Output, Pull};
 use esp_hal::prelude::*;
 use esp_hal::reset::software_reset;
-use esp_hal::rmt::Rmt;
 use esp_hal::rng::Rng;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::timer::AnyTimer;
 use esp_println::println;
-use smart_leds::RGB8;
-use smartled::SmartLedsAdapter;
-use wifi::{start_bluetooth, start_wifi};
+use lights::{battery_low, setup_lights};
+use wifi::start_wifi;
 
 #[esp_hal_embassy::main]
 async fn main(spawner: embassy_executor::Spawner) {
@@ -55,13 +53,19 @@ async fn main(spawner: embassy_executor::Spawner) {
     let timg1 = TimerGroup::new(peripherals.TIMG1);
     esp_hal_embassy::init(timg1.timer0);
 
-    let rmt = Rmt::new(peripherals.RMT, 80.MHz()).unwrap();
-
     let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
     _ = Output::new(io.pins.gpio20, esp_hal::gpio::Level::High);
 
-    let rmt_buffer = smartLedBuffer!(1);
-    let mut led = SmartLedsAdapter::new(rmt.channel0, io.pins.gpio9, rmt_buffer);
+    // MARK: Light task
+
+    spawner
+        .spawn(setup_lights(io.pins.gpio1, io.pins.gpio4, io.pins.gpio6))
+        .ok();
+
+    Timer::after_secs(1).await;
+
+    lights::battery_low(false).await;
+    lights::is_charging(false).await;
 
     // let i2c0 = I2C::new_async(peripherals.I2C0, io.pins.gpio19, io.pins.gpio18, 400.kHz());
     // println!("spawning battery task");
@@ -72,15 +76,13 @@ async fn main(spawner: embassy_executor::Spawner) {
     spawner.spawn(button_task(button)).unwrap();
 
     if button_is_high {
-        leds::fade_in(&mut led, RGB8 { r: 0, g: 0, b: 30 }, 100);
-
+        lights::bluetooth_enabled(true).await;
         spawner
-            .spawn(start_bluetooth(
+            .spawn(bluetooth::start_bluetooth(
                 timer,
                 Rng::new(peripherals.RNG),
                 peripherals.RADIO_CLK,
                 peripherals.BT,
-                led,
             ))
             .unwrap();
     } else {
@@ -90,7 +92,6 @@ async fn main(spawner: embassy_executor::Spawner) {
                 Rng::new(peripherals.RNG),
                 peripherals.RADIO_CLK,
                 peripherals.WIFI,
-                led,
             ))
             .unwrap();
     }

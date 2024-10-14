@@ -38,6 +38,7 @@ esp32c6 = { version = "0.16.0", features = ["critical-section", "rt"] }
 ieee80211 = "0.5.0"
 bleps = { git = "https://github.com/bjoernQ/bleps", package = "bleps", features = [
   "macros",
+  "async",
 ] }
 esp-wifi = { git = "https://github.com/esp-rs/esp-hal.git", features = [
   "esp32c6",
@@ -79,8 +80,7 @@ static_cell = { version = "2.1.0", features = ["nightly"] }
 embassy-time = "0.3.2"
 embassy-futures = "0.1.1"
 embedded-storage = "0.3.1"
-smart-leds-trait = "0.3.0"
-smart-leds = "0.4.0"
+embassy-sync = "0.6.0"
 
 [build-dependencies]
 embuild = "0.32.0"
