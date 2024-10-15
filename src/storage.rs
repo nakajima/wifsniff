@@ -1,3 +1,5 @@
+use core::str;
+
 use alloc::vec::Vec;
 use embedded_storage::{ReadStorage, Storage};
 use esp_backtrace as _;
@@ -39,6 +41,18 @@ impl Store {
         let mut bytes: [u8; 4] = [0; 4];
         self.storage.read(FLASH_START, &mut bytes).unwrap();
         return u32::from_le_bytes(bytes);
+    }
+
+    pub fn dump(&mut self) {
+        let mut cursor = FLASH_START + 4;
+        for _ in 0..self.count() {
+            let mut bytes: [u8; 256] = [0 as u8; 256];
+            let _ = self.storage.read(cursor, &mut bytes).unwrap();
+            let len = bytes[0] as usize;
+            let real_bytes = bytes[1..(len + 1)].to_vec();
+            println!("{:?}", str::from_utf8(&real_bytes));
+            cursor += 256;
+        }
     }
 
     pub fn entries(&mut self) -> Vec<Vec<u8>> {

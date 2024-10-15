@@ -1,11 +1,45 @@
+use embassy_futures::{join, select};
+use embassy_time::Timer;
+use esp32c6::lp_aon::usb;
 use esp_hal::{
-    i2c::{Error, I2C},
+    gpio::{GpioPin, Input, Pull},
+    i2c::{Error, I2c},
     Async,
 };
+use esp_println::println;
+
+use crate::lights::{battery_low, is_charging};
 
 const DEFAULT_RCOMP: u8 = 0x97;
 
-type AsyncI2C = I2C<'static, esp_hal::peripherals::I2C0, Async>;
+type AsyncI2C = I2c<'static, esp_hal::peripherals::I2C0, Async>;
+
+#[embassy_executor::task]
+pub async fn start_battery(i2c: AsyncI2C, usb_pin: GpioPin<16>) {
+    let mut adapter = Max17048::new(i2c, 0x36).await;
+    let mut usb = Input::new(usb_pin, Pull::Down);
+
+    loop {
+        println!("Battery charge rate: {:?}", adapter.charge_rate().await);
+        println!("Battery SOC: {:?}", adapter.soc().await);
+        println!("Battery Vcell: {:?}", adapter.vcell().await);
+        println!("Is charging: {:?}", usb.get_level());
+
+        if adapter.soc().await.unwrap() < 20 {
+            battery_low(true).await;
+        } else {
+            battery_low(false).await;
+        }
+
+        if usb.is_high() {
+            is_charging(true).await;
+        } else {
+            is_charging(false).await;
+        }
+
+        select::select(Timer::after_secs(5), usb.wait_for_any_edge()).await;
+    }
+}
 
 pub struct Max17048 {
     i2c: AsyncI2C,

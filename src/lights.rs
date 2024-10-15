@@ -4,75 +4,54 @@ use embassy_sync::{
     pubsub::{PubSubChannel, Publisher},
 };
 use embassy_time::{Duration, Timer};
+use embedded_hal::digital::{OutputPin, PinState};
 use esp_hal::{
     gpio::{GpioPin, Level, Output},
     Async,
 };
 use esp_println::println;
 
-static BATTERY_LOW_CHANNEL: PubSubChannel<CriticalSectionRawMutex, bool, 4, 4, 4> =
-    PubSubChannel::<CriticalSectionRawMutex, bool, 4, 4, 4>::new();
+#[derive(Clone, Debug)]
+enum LightChange {
+    BatteryLow(bool),
+    IsCharging(bool),
+    BlueoothEnabled(bool),
+    ButtonPressed(bool),
+}
 
-static IS_CHARGING_CHANNEL: PubSubChannel<CriticalSectionRawMutex, bool, 4, 4, 4> =
-    PubSubChannel::<CriticalSectionRawMutex, bool, 4, 4, 4>::new();
-
-static BLUETOOTH_CHANNEL: PubSubChannel<CriticalSectionRawMutex, bool, 4, 4, 4> =
-    PubSubChannel::<CriticalSectionRawMutex, bool, 4, 4, 4>::new();
+static LIGHTS_CHANNEL: PubSubChannel<CriticalSectionRawMutex, LightChange, 4, 4, 4> =
+    PubSubChannel::<CriticalSectionRawMutex, LightChange, 4, 4, 4>::new();
 
 pub async fn battery_low(state: bool) {
-    BATTERY_LOW_CHANNEL
+    LIGHTS_CHANNEL
         .publisher()
         .unwrap()
-        .publish(state)
+        .publish(LightChange::BatteryLow(state))
         .await;
 }
 
 pub async fn is_charging(state: bool) {
-    IS_CHARGING_CHANNEL
+    LIGHTS_CHANNEL
         .publisher()
         .unwrap()
-        .publish(state)
+        .publish(LightChange::IsCharging(state))
         .await;
 }
 
 pub async fn bluetooth_enabled(state: bool) {
-    BLUETOOTH_CHANNEL.publisher().unwrap().publish(state).await;
+    LIGHTS_CHANNEL
+        .publisher()
+        .unwrap()
+        .publish(LightChange::BlueoothEnabled(state))
+        .await;
 }
 
-async fn battery_future(io: &mut Output<'_>) {
-    let mut subscriber = BATTERY_LOW_CHANNEL.subscriber().unwrap();
-    let change = subscriber.next_message_pure().await;
-    if change {
-        println!("is low battery");
-        io.set_high();
-    } else {
-        println!("is not charging");
-        io.set_low();
-    }
-}
-
-async fn charging_future(io: &mut Output<'_>) {
-    let mut subscriber = IS_CHARGING_CHANNEL.subscriber().unwrap();
-    let change = subscriber.next_message_pure().await;
-    if change {
-        println!("is charging");
-        io.set_high();
-    } else {
-        println!("not charging");
-        io.set_low();
-    }
-}
-
-async fn bluetooth_future(io: &mut Output<'_>) {
-    let mut subscriber = BLUETOOTH_CHANNEL.subscriber().unwrap();
-    let change = subscriber.next_message_pure().await;
-    if change {
-        println!("is bluetooth");
-        io.set_high();
-    } else {
-        println!("not bluetooth");
-        io.set_low();
-    }
+pub async fn button_pressed(state: bool) {
+    LIGHTS_CHANNEL
+        .publisher()
+        .unwrap()
+        .publish(LightChange::ButtonPressed(state))
+        .await;
 }
 
 #[embassy_executor::task]
@@ -80,17 +59,33 @@ pub async fn setup_lights(
     battery_low_pin: GpioPin<1>,
     is_charging_pin: GpioPin<4>,
     bluetooth_mode: GpioPin<6>,
+    button_press_pin: GpioPin<5>,
 ) {
     let mut battery = Output::new(battery_low_pin, Level::Low);
     let mut charging = Output::new(is_charging_pin, Level::Low);
     let mut bluetooth = Output::new(bluetooth_mode, Level::Low);
+    let mut button_press = Output::new(button_press_pin, Level::Low);
+
+    let mut subscriber = LIGHTS_CHANNEL.subscriber().unwrap();
 
     loop {
-        join::join3(
-            battery_future(&mut battery),
-            charging_future(&mut charging),
-            bluetooth_future(&mut bluetooth),
-        )
-        .await;
+        let change = subscriber.next_message_pure().await;
+
+        println!("light change: {:?}", change);
+
+        match change {
+            LightChange::BatteryLow(state) => battery
+                .set_state(if state { PinState::High } else { PinState::Low })
+                .unwrap(),
+            LightChange::IsCharging(state) => charging
+                .set_state(if state { PinState::High } else { PinState::Low })
+                .unwrap(),
+            LightChange::BlueoothEnabled(state) => bluetooth
+                .set_state(if state { PinState::High } else { PinState::Low })
+                .unwrap(),
+            LightChange::ButtonPressed(state) => button_press
+                .set_state(if state { PinState::High } else { PinState::Low })
+                .unwrap(),
+        }
     }
 }

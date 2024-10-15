@@ -16,6 +16,7 @@
     generic_const_exprs
 )]
 
+mod battery;
 mod bluetooth;
 mod lights;
 mod storage;
@@ -26,14 +27,15 @@ extern crate alloc;
 use embassy_time::{Duration, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
-use esp_hal::gpio::{GpioPin, Input, Io, Level, Output, Pull};
+use esp_hal::gpio::{GpioPin, Input, Io, Output, Pull};
+use esp_hal::i2c::I2c;
 use esp_hal::prelude::*;
 use esp_hal::reset::software_reset;
 use esp_hal::rng::Rng;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::timer::AnyTimer;
 use esp_println::println;
-use lights::{battery_low, setup_lights};
+use lights::{battery_low, bluetooth_enabled, button_pressed, is_charging, setup_lights};
 use wifi::start_wifi;
 
 #[esp_hal_embassy::main]
@@ -41,11 +43,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     esp_alloc::heap_allocator!(64 * 1024);
     esp_println::logger::init_logger_from_env();
 
-    let peripherals = esp_hal::init({
-        let mut config = esp_hal::Config::default();
-        config.cpu_clock = CpuClock::max();
-        config
-    });
+    let peripherals = esp_hal::init(esp_hal::Config::default());
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let timer: AnyTimer = timg0.timer0.into();
@@ -56,22 +54,41 @@ async fn main(spawner: embassy_executor::Spawner) {
     let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
     _ = Output::new(io.pins.gpio20, esp_hal::gpio::Level::High);
 
-    // MARK: Light task
-
     spawner
-        .spawn(setup_lights(io.pins.gpio1, io.pins.gpio4, io.pins.gpio6))
+        .spawn(setup_lights(
+            io.pins.gpio1,
+            io.pins.gpio4,
+            io.pins.gpio6,
+            io.pins.gpio5,
+        ))
         .ok();
 
-    Timer::after_secs(1).await;
+    Timer::after_millis(100).await;
+    bluetooth_enabled(true).await;
+    Timer::after_millis(100).await;
+    is_charging(true).await;
+    Timer::after_millis(100).await;
+    battery_low(true).await;
+    Timer::after_millis(100).await;
+    button_pressed(true).await;
+    Timer::after_millis(300).await;
 
-    lights::battery_low(false).await;
-    lights::is_charging(false).await;
+    // storage::Store::reset();
 
-    // let i2c0 = I2C::new_async(peripherals.I2C0, io.pins.gpio19, io.pins.gpio18, 400.kHz());
-    // println!("spawning battery task");
-    // spawner.spawn(start_battery(i2c0)).unwrap();
+    // MARK: Light task
 
-    let button = Input::new_typed(io.pins.gpio7, Pull::Down);
+    battery_low(false).await;
+    bluetooth_enabled(false).await;
+    is_charging(false).await;
+    button_pressed(false).await;
+
+    let i2c0 = I2c::new_async(peripherals.I2C0, io.pins.gpio19, io.pins.gpio18, 400.kHz());
+    println!("spawning battery task");
+    spawner
+        .spawn(battery::start_battery(i2c0, io.pins.gpio16))
+        .unwrap();
+
+    let button = Input::new_typed(io.pins.gpio17, Pull::Down);
     let button_is_high = button.is_high();
     spawner.spawn(button_task(button)).unwrap();
 
@@ -96,15 +113,20 @@ async fn main(spawner: embassy_executor::Spawner) {
             .unwrap();
     }
 
+    println!("We know about:");
+    storage::Store::new().dump();
+
     loop {
         Timer::after(Duration::from_secs(10)).await;
     }
 }
 
 #[embassy_executor::task]
-async fn button_task(mut button: Input<'static, GpioPin<7>>) {
+async fn button_task(mut button: Input<'static, GpioPin<17>>) {
     loop {
         button.wait_for_rising_edge().await;
+
+        button_pressed(true).await;
 
         let mut is_long_press = true;
         for _ in 0..=200 {
@@ -115,6 +137,8 @@ async fn button_task(mut button: Input<'static, GpioPin<7>>) {
 
             Timer::after(Duration::from_millis(10)).await;
         }
+
+        button_pressed(false).await;
 
         if is_long_press {
             println!("Is a long press");
