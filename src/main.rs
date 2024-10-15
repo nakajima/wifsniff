@@ -29,8 +29,8 @@ use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::gpio::{GpioPin, Input, Io, Output, Pull};
 use esp_hal::i2c::I2c;
+use esp_hal::ledc::Ledc;
 use esp_hal::prelude::*;
-use esp_hal::reset::software_reset;
 use esp_hal::rng::Rng;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::timer::AnyTimer;
@@ -54,8 +54,11 @@ async fn main(spawner: embassy_executor::Spawner) {
     let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
     _ = Output::new(io.pins.gpio20, esp_hal::gpio::Level::High);
 
+    let ledc = Ledc::new(peripherals.LEDC);
+
     spawner
         .spawn(setup_lights(
+            ledc,
             io.pins.gpio1,
             io.pins.gpio4,
             io.pins.gpio6,
@@ -125,7 +128,6 @@ async fn main(spawner: embassy_executor::Spawner) {
 async fn button_task(mut button: Input<'static, GpioPin<17>>) {
     loop {
         button.wait_for_rising_edge().await;
-
         button_pressed(true).await;
 
         let mut is_long_press = true;
@@ -143,7 +145,14 @@ async fn button_task(mut button: Input<'static, GpioPin<17>>) {
         if is_long_press {
             println!("Is a long press");
             // restart to put in bluetooth mode
-            software_reset();
+            // software_reset();
+
+            for _ in 0..=5 {
+                bluetooth_enabled(true).await;
+                Timer::after(Duration::from_millis(200)).await;
+                bluetooth_enabled(false).await;
+                Timer::after(Duration::from_millis(200)).await;
+            }
         } else {
             println!("Not a long press");
         }

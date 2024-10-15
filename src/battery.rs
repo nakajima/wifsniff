@@ -27,12 +27,18 @@ pub async fn start_battery(i2c: AsyncI2C, usb_pin: GpioPin<16>) {
 
         if adapter.soc().await.unwrap() < 20 {
             battery_low(true).await;
+            Timer::after_millis(200).await;
+            // Don't leave the light on, just flash it every 5 seconds.
+            battery_low(false).await;
         } else {
             battery_low(false).await;
         }
 
         if usb.is_high() {
             is_charging(true).await;
+            Timer::after_millis(200).await;
+            // Don't leave the light on, just flash it every 5 seconds.
+            is_charging(false).await;
         } else {
             is_charging(false).await;
         }
@@ -56,6 +62,10 @@ impl Max17048 {
         };
         let _ = max.compensation(DEFAULT_RCOMP).await;
         max
+    }
+
+    pub async fn reset(&mut self) -> Result<(), Error> {
+        self.write(0xFE, 0x5400).await
     }
 
     pub async fn version(&mut self) -> Result<u16, Error> {
