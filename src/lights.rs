@@ -12,16 +12,29 @@ use esp_hal::{
 use esp_hal::{ledc::channel, prelude::*};
 use esp_println::println;
 
+pub enum Light {
+    Blue,
+    Green,
+    Yellow,
+    White,
+}
+
 #[derive(Clone, Debug)]
-pub enum LightChange {
+enum LightChange {
     Blue(bool),
     Green(bool),
     Yellow(bool),
     White(bool),
 }
 
-pub async fn change(light_change: LightChange) {
-    println!("Change: {:?}", light_change);
+pub async fn change(light: Light, enabled: bool) {
+    let light_change = match light {
+        Light::Blue => LightChange::Blue(enabled),
+        Light::Green => LightChange::Green(enabled),
+        Light::Yellow => LightChange::Yellow(enabled),
+        Light::White => LightChange::White(enabled),
+    };
+
     LIGHTS_CHANNEL
         .publisher()
         .unwrap()
@@ -29,11 +42,19 @@ pub async fn change(light_change: LightChange) {
         .await;
 }
 
-pub async fn off() {
-    change(LightChange::White(false)).await;
-    change(LightChange::Yellow(false)).await;
-    change(LightChange::Green(false)).await;
-    change(LightChange::Blue(false)).await;
+pub async fn on(light: Light) {
+    change(light, true).await;
+}
+
+pub async fn off(light: Light) {
+    change(light, false).await;
+}
+
+pub async fn all_off() {
+    change(Light::White, false).await;
+    change(Light::Yellow, false).await;
+    change(Light::Green, false).await;
+    change(Light::Blue, false).await;
 }
 
 static LIGHTS_CHANNEL: PubSubChannel<CriticalSectionRawMutex, LightChange, 4, 4, 4> =

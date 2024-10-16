@@ -10,7 +10,7 @@ use esp_println::println;
 
 use crate::{
     button::{ButtonPress, BUTTON_CHANNEL},
-    lights,
+    lights::{self, Light},
 };
 
 static SCENE_CHANNEL: PubSubChannel<CriticalSectionRawMutex, CurrentScene, 4, 4, 4> =
@@ -177,20 +177,20 @@ pub struct StartupScene {}
 
 impl Scene for StartupScene {
     async fn enter(&self) {
-        lights::off().await;
+        lights::all_off().await;
     }
 
     async fn tick(&mut self) {
         Timer::after_millis(100).await;
-        lights::change(lights::LightChange::White(true)).await;
+        lights::on(Light::White).await;
         Timer::after_millis(200).await;
-        lights::change(lights::LightChange::Yellow(true)).await;
+        lights::on(Light::Yellow).await;
         Timer::after_millis(200).await;
-        lights::change(lights::LightChange::Green(true)).await;
+        lights::on(Light::Green).await;
         Timer::after_millis(200).await;
-        lights::change(lights::LightChange::Blue(true)).await;
+        lights::on(Light::Blue).await;
         Timer::after_millis(400).await;
-        lights::off().await;
+        lights::all_off().await;
 
         enter(CurrentScene::Sniffing(SniffingScene {})).await;
     }
@@ -201,11 +201,11 @@ pub struct SniffingScene {}
 
 impl Scene for SniffingScene {
     async fn button_down(&mut self) {
-        lights::change(lights::LightChange::White(true)).await;
+        lights::on(Light::White).await;
     }
 
     async fn button_up(&mut self) {
-        lights::change(lights::LightChange::White(false)).await;
+        lights::off(Light::White).await;
     }
 
     async fn long_press(&mut self) {
@@ -237,11 +237,11 @@ pub struct MenuScene {
 
 impl Scene for MenuScene {
     async fn enter(&self) {
-        lights::off().await;
+        lights::all_off().await;
     }
 
     async fn button_press(&mut self) {
-        lights::off().await;
+        lights::all_off().await;
 
         match self.current {
             MenuOption::Sniff => {
@@ -259,11 +259,13 @@ impl Scene for MenuScene {
     }
 
     async fn tick(&mut self) {
+        lights::all_off();
+
         match self.current {
-            MenuOption::Sniff => lights::change(lights::LightChange::White(self.is_on)).await,
-            MenuOption::Sleep => lights::change(lights::LightChange::Green(self.is_on)).await,
-            MenuOption::Erase => lights::change(lights::LightChange::Yellow(self.is_on)).await,
-            MenuOption::Bluetooth => lights::change(lights::LightChange::Blue(self.is_on)).await,
+            MenuOption::Sniff => lights::on(Light::White).await,
+            MenuOption::Erase => lights::on(Light::Yellow).await,
+            MenuOption::Sleep => lights::on(Light::Green).await,
+            MenuOption::Bluetooth => lights::on(Light::Blue).await,
         }
 
         self.is_on = !self.is_on;
