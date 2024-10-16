@@ -27,7 +27,7 @@ pub async fn button_task(mut button: Input<'static, GpioPin<17>>) {
         publisher.publish(ButtonPress::Down).await;
 
         let mut is_long_press = true;
-        for _ in 0..=200 {
+        for _ in 0..=150 {
             if button.is_low() {
                 is_long_press = false;
                 break;

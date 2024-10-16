@@ -22,17 +22,25 @@ pub enum Color {
 }
 
 #[derive(Clone, Debug)]
-struct LightChange {
-    color: Color,
-    brightness: u8,
-    duration: u16,
+pub struct LightChange {
+    pub color: Color,
+    pub brightness: u8,
+    pub duration: u16,
+}
+
+pub async fn apply(change: &LightChange) {
+    LIGHTS_CHANNEL
+        .publisher()
+        .unwrap()
+        .publish(change.clone())
+        .await;
 }
 
 pub async fn change(light: Color, enabled: bool) {
     let light_change = LightChange {
         color: light,
         brightness: if enabled { 20 } else { 0 },
-        duration: 64,
+        duration: 32,
     };
 
     LIGHTS_CHANNEL
@@ -84,6 +92,10 @@ impl Light {
         if change.brightness == self.brightness {
             // We're already there, no need to do anything
             return;
+        }
+
+        if self.channel.is_duty_fade_running() {
+            embassy_time::Timer::after_millis(200).await;
         }
 
         self.channel

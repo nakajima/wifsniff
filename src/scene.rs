@@ -216,6 +216,10 @@ impl Scene for SniffingScene {
         .await;
     }
 
+    async fn enter(&self) {
+        lights::all_off().await;
+    }
+
     async fn tick(&mut self) {
         Timer::after_millis(2).await;
     }
@@ -238,6 +242,42 @@ pub struct MenuScene {
 impl Scene for MenuScene {
     async fn enter(&self) {
         lights::all_off().await;
+    }
+
+    async fn long_press(&mut self) {
+        let on = lights::LightChange {
+            color: match self.current {
+                MenuOption::Sniff => Color::White,
+                MenuOption::Erase => Color::Yellow,
+                MenuOption::Sleep => Color::Green,
+                MenuOption::Bluetooth => Color::Blue,
+            },
+            brightness: 100,
+            duration: 16,
+        };
+
+        let off = lights::LightChange {
+            color: match self.current {
+                MenuOption::Sniff => Color::White,
+                MenuOption::Erase => Color::Yellow,
+                MenuOption::Sleep => Color::Green,
+                MenuOption::Bluetooth => Color::Blue,
+            },
+            brightness: 0,
+            duration: 16,
+        };
+
+        for i in 0..=5 {
+            if i % 2 == 0 {
+                lights::apply(&on).await;
+            } else {
+                lights::apply(&off).await;
+            }
+
+            Timer::after_millis(100).await;
+        }
+
+        enter(CurrentScene::Sniffing(SniffingScene {})).await;
     }
 
     async fn button_press(&mut self) {
