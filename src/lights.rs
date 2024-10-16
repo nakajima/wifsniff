@@ -1,18 +1,20 @@
-use embassy_futures::join;
-use embassy_sync::{
-    blocking_mutex::raw::CriticalSectionRawMutex,
-    pubsub::{PubSubChannel, Publisher},
+use core::{
+    borrow::{Borrow, BorrowMut},
+    cell::{RefCell, RefMut},
+    ops::Deref,
 };
-use embedded_hal::digital::{OutputPin, PinState};
+
+use alloc::{borrow::ToOwned, boxed::Box};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, pubsub::PubSubChannel};
 use esp_hal::{
-    gpio::{GpioPin, Level, Output},
-    ledc::{timer, LSGlobalClkSource, Ledc, LowSpeed},
+    gpio::{AnyPin, GpioPin, Level, Output},
+    ledc::{channel::Channel, timer, LSGlobalClkSource, Ledc, LowSpeed},
     prelude::_esp_hal_ledc_timer_TimerIFace,
 };
 use esp_hal::{ledc::channel, prelude::*};
-use esp_println::println;
 
-pub enum Light {
+#[derive(Clone, Debug)]
+pub enum Color {
     Blue,
     Green,
     Yellow,
@@ -20,19 +22,17 @@ pub enum Light {
 }
 
 #[derive(Clone, Debug)]
-enum LightChange {
-    Blue(bool),
-    Green(bool),
-    Yellow(bool),
-    White(bool),
+struct LightChange {
+    color: Color,
+    brightness: u8,
+    duration: u16,
 }
 
-pub async fn change(light: Light, enabled: bool) {
-    let light_change = match light {
-        Light::Blue => LightChange::Blue(enabled),
-        Light::Green => LightChange::Green(enabled),
-        Light::Yellow => LightChange::Yellow(enabled),
-        Light::White => LightChange::White(enabled),
+pub async fn change(light: Color, enabled: bool) {
+    let light_change = LightChange {
+        color: light,
+        brightness: if enabled { 20 } else { 0 },
+        duration: 64,
     };
 
     LIGHTS_CHANNEL
@@ -42,19 +42,55 @@ pub async fn change(light: Light, enabled: bool) {
         .await;
 }
 
-pub async fn on(light: Light) {
+pub async fn on(light: Color) {
     change(light, true).await;
 }
 
-pub async fn off(light: Light) {
+pub async fn off(light: Color) {
     change(light, false).await;
 }
 
 pub async fn all_off() {
-    change(Light::White, false).await;
-    change(Light::Yellow, false).await;
-    change(Light::Green, false).await;
-    change(Light::Blue, false).await;
+    change(Color::White, false).await;
+    change(Color::Yellow, false).await;
+    change(Color::Green, false).await;
+    change(Color::Blue, false).await;
+}
+
+struct Light {
+    brightness: u8,
+    channel: Channel<'static, LowSpeed, AnyPin>,
+}
+impl Light {
+    fn new(
+        mut channel: Channel<'static, LowSpeed, AnyPin>,
+        timer: &'static timer::Timer<'static, LowSpeed>,
+    ) -> Self {
+        channel
+            .configure(channel::config::Config {
+                timer: timer,
+                duty_pct: 24,
+                pin_config: channel::config::PinConfig::PushPull,
+            })
+            .unwrap();
+
+        Self {
+            brightness: 0,
+            channel,
+        }
+    }
+
+    async fn apply(&mut self, change: LightChange) {
+        if change.brightness == self.brightness {
+            // We're already there, no need to do anything
+            return;
+        }
+
+        self.channel
+            .start_duty_fade(self.brightness, change.brightness, change.duration)
+            .unwrap();
+        self.brightness = change.brightness;
+    }
 }
 
 static LIGHTS_CHANNEL: PubSubChannel<CriticalSectionRawMutex, LightChange, 4, 4, 4> =
@@ -67,7 +103,7 @@ pub async fn setup_lights(
     green_pin: GpioPin<4>,
     blue_pin: GpioPin<6>,
     white_pin: GpioPin<5>,
-) {
+) -> ! {
     let yellow_output = Output::new(yellow_pin, Level::Low);
     let green_output = Output::new(green_pin, Level::Low);
     let blue_output = Output::new(blue_pin, Level::Low);
@@ -84,80 +120,30 @@ pub async fn setup_lights(
         })
         .unwrap();
 
-    let mut yellow = ledc.get_channel(channel::Number::Channel0, yellow_output);
-    yellow
-        .configure(channel::config::Config {
-            timer: &lstimer0,
-            duty_pct: 24,
-            pin_config: channel::config::PinConfig::PushPull,
-        })
-        .unwrap();
+    let timer = Box::leak(Box::new(lstimer0));
 
-    let mut green = ledc.get_channel(channel::Number::Channel1, green_output);
-    green
-        .configure(channel::config::Config {
-            timer: &lstimer0,
-            duty_pct: 24,
-            pin_config: channel::config::PinConfig::PushPull,
-        })
-        .unwrap();
+    let yellow_channel = ledc.get_channel(channel::Number::Channel0, yellow_output);
+    let mut yellow = Light::new(yellow_channel, timer);
 
-    let mut blue = ledc.get_channel(channel::Number::Channel2, blue_output);
-    blue.configure(channel::config::Config {
-        timer: &lstimer0,
-        duty_pct: 24,
-        pin_config: channel::config::PinConfig::PushPull,
-    })
-    .unwrap();
+    let green_channel = ledc.get_channel(channel::Number::Channel1, green_output);
+    let mut green = Light::new(green_channel, timer);
 
-    let mut white = ledc.get_channel(channel::Number::Channel3, white_output);
-    white
-        .configure(channel::config::Config {
-            timer: &lstimer0,
-            duty_pct: 24,
-            pin_config: channel::config::PinConfig::PushPull,
-        })
-        .unwrap();
+    let blue_channel = ledc.get_channel(channel::Number::Channel2, blue_output);
+    let mut blue = Light::new(blue_channel, timer);
+
+    let white_channel = ledc.get_channel(channel::Number::Channel3, white_output);
+    let mut white = Light::new(white_channel, timer);
 
     let mut subscriber = LIGHTS_CHANNEL.subscriber().unwrap();
-
-    blue.set_duty(0).unwrap();
-    green.set_duty(0).unwrap();
-    yellow.set_duty(0).unwrap();
-    white.set_duty(0).unwrap();
 
     loop {
         let change = subscriber.next_message_pure().await;
 
-        match change {
-            LightChange::Yellow(state) => {
-                if state {
-                    yellow.start_duty_fade(0, 20, 40).unwrap();
-                } else {
-                    yellow.start_duty_fade(20, 0, 40).unwrap();
-                }
-            }
-            LightChange::Green(state) => {
-                if state {
-                    green.start_duty_fade(0, 20, 40).unwrap();
-                } else {
-                    green.start_duty_fade(20, 0, 40).unwrap();
-                }
-            }
-            LightChange::Blue(state) => {
-                if state {
-                    blue.start_duty_fade(0, 20, 40).unwrap();
-                } else {
-                    blue.start_duty_fade(20, 0, 40).unwrap();
-                }
-            }
-            LightChange::White(state) => {
-                if state {
-                    white.start_duty_fade(0, 20, 40).unwrap();
-                } else {
-                    white.start_duty_fade(20, 0, 40).unwrap();
-                }
-            }
+        match change.color {
+            Color::White => white.apply(change).await,
+            Color::Yellow => yellow.apply(change).await,
+            Color::Green => green.apply(change).await,
+            Color::Blue => blue.apply(change).await,
         }
     }
 }

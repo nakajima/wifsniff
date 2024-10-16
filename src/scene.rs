@@ -10,7 +10,7 @@ use esp_println::println;
 
 use crate::{
     button::{ButtonPress, BUTTON_CHANNEL},
-    lights::{self, Light},
+    lights::{self, Color},
 };
 
 static SCENE_CHANNEL: PubSubChannel<CriticalSectionRawMutex, CurrentScene, 4, 4, 4> =
@@ -182,13 +182,13 @@ impl Scene for StartupScene {
 
     async fn tick(&mut self) {
         Timer::after_millis(100).await;
-        lights::on(Light::White).await;
+        lights::on(Color::White).await;
         Timer::after_millis(200).await;
-        lights::on(Light::Yellow).await;
+        lights::on(Color::Yellow).await;
         Timer::after_millis(200).await;
-        lights::on(Light::Green).await;
+        lights::on(Color::Green).await;
         Timer::after_millis(200).await;
-        lights::on(Light::Blue).await;
+        lights::on(Color::Blue).await;
         Timer::after_millis(400).await;
         lights::all_off().await;
 
@@ -201,11 +201,11 @@ pub struct SniffingScene {}
 
 impl Scene for SniffingScene {
     async fn button_down(&mut self) {
-        lights::on(Light::White).await;
+        lights::on(Color::White).await;
     }
 
     async fn button_up(&mut self) {
-        lights::off(Light::White).await;
+        lights::off(Color::White).await;
     }
 
     async fn long_press(&mut self) {
@@ -259,13 +259,13 @@ impl Scene for MenuScene {
     }
 
     async fn tick(&mut self) {
-        lights::all_off();
+        lights::all_off().await;
 
         match self.current {
-            MenuOption::Sniff => lights::on(Light::White).await,
-            MenuOption::Erase => lights::on(Light::Yellow).await,
-            MenuOption::Sleep => lights::on(Light::Green).await,
-            MenuOption::Bluetooth => lights::on(Light::Blue).await,
+            MenuOption::Sniff => lights::change(Color::White, self.is_on).await,
+            MenuOption::Erase => lights::change(Color::Yellow, self.is_on).await,
+            MenuOption::Sleep => lights::change(Color::Green, self.is_on).await,
+            MenuOption::Bluetooth => lights::change(Color::Blue, self.is_on).await,
         }
 
         self.is_on = !self.is_on;
