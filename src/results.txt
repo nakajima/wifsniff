@@ -137,3 +137,4 @@
 + CH Store
 + S2133B000140
 + NETGEAR63
++ Alexa

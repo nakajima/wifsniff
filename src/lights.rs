@@ -111,16 +111,16 @@ pub async fn setup_lights(
         match change {
             LightChange::Yellow(state) => {
                 if state {
-                    yellow.start_duty_fade(0, 40, 400).unwrap();
+                    yellow.start_duty_fade(0, 20, 40).unwrap();
                 } else {
-                    yellow.start_duty_fade(40, 0, 400).unwrap();
+                    yellow.start_duty_fade(20, 0, 40).unwrap();
                 }
             }
             LightChange::Green(state) => {
                 if state {
-                    green.start_duty_fade(0, 20, 128).unwrap();
+                    green.start_duty_fade(0, 20, 40).unwrap();
                 } else {
-                    green.start_duty_fade(20, 0, 128).unwrap();
+                    green.start_duty_fade(20, 0, 40).unwrap();
                 }
             }
             LightChange::Blue(state) => {
