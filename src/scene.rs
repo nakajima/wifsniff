@@ -1,10 +1,6 @@
-use core::{
-    cell::{RefCell, RefMut},
-    ops::DerefMut,
-    result,
-};
+use core::cell::RefCell;
 
-use embassy_futures::select::{select, Either};
+use embassy_futures::select::{select3, Either3};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     pubsub::{PubSubChannel, Subscriber},
@@ -12,7 +8,10 @@ use embassy_sync::{
 use embassy_time::Timer;
 use esp_println::println;
 
-use crate::{button::BUTTON_CHANNEL, lights};
+use crate::{
+    button::{ButtonPress, BUTTON_CHANNEL},
+    lights,
+};
 
 static SCENE_CHANNEL: PubSubChannel<CriticalSectionRawMutex, CurrentScene, 4, 4, 4> =
     PubSubChannel::<CriticalSectionRawMutex, CurrentScene, 4, 4, 4>::new();
@@ -25,7 +24,9 @@ pub async fn enter(scene: CurrentScene) {
 }
 
 trait Scene {
-    async fn single_press(&mut self) {}
+    async fn button_press(&mut self) {}
+    async fn button_down(&mut self) {}
+    async fn button_up(&mut self) {}
     async fn long_press(&mut self) {}
     async fn enter(&self) {}
     async fn tick(&mut self);
@@ -50,6 +51,62 @@ impl CurrentScene {
             }
             Self::Menu(scene) => {
                 scene.tick().await;
+            }
+        }
+    }
+
+    async fn button_press(&mut self) {
+        match self {
+            Self::Startup(scene) => {
+                scene.button_press().await;
+            }
+            Self::Sniffing(scene) => {
+                scene.button_press().await;
+            }
+            Self::Menu(scene) => {
+                scene.button_press().await;
+            }
+        }
+    }
+
+    async fn button_down(&mut self) {
+        match self {
+            Self::Startup(scene) => {
+                scene.button_down().await;
+            }
+            Self::Sniffing(scene) => {
+                scene.button_down().await;
+            }
+            Self::Menu(scene) => {
+                scene.button_down().await;
+            }
+        }
+    }
+
+    async fn button_up(&mut self) {
+        match self {
+            Self::Startup(scene) => {
+                scene.button_up().await;
+            }
+            Self::Sniffing(scene) => {
+                scene.button_up().await;
+            }
+            Self::Menu(scene) => {
+                scene.button_up().await;
+            }
+        }
+    }
+
+    async fn long_press(&mut self) {
+        match self {
+            Self::Startup(scene) => {
+                scene.long_press().await;
+            }
+            Self::Sniffing(scene) => {
+                scene.long_press().await;
+            }
+            Self::Menu(scene) => {
+                scene.long_press().await;
             }
         }
     }
@@ -82,24 +139,35 @@ pub async fn setup_scene_manager() {
     let mut subscriber = SCENE_CHANNEL.subscriber().unwrap();
     let mut button = BUTTON_CHANNEL.subscriber().unwrap();
 
-    async fn listen_to_button(subscribe: &mut ButtonSubscriber) {
-        let button = subscribe.next_message_pure().await;
-    }
-
     loop {
-        let result = select(
+        let result = select3(
             current_scene.borrow_mut().tick(),
             update_current_scene(&mut subscriber),
+            button.next_message_pure(),
         )
         .await;
 
         match result {
-            Either::First(_) => (),
-            Either::Second(next_scene) => {
+            Either3::First(_) => (),
+            Either3::Second(next_scene) => {
                 println!("Scene change: {:?}", next_scene);
                 current_scene.borrow().leave().await;
                 *current_scene.borrow_mut() = next_scene
             }
+            Either3::Third(button_press) => match button_press {
+                ButtonPress::Single => {
+                    current_scene.borrow_mut().button_press().await;
+                }
+                ButtonPress::Long => {
+                    current_scene.borrow_mut().long_press().await;
+                }
+                ButtonPress::Down => {
+                    current_scene.borrow_mut().button_down().await;
+                }
+                ButtonPress::Up => {
+                    current_scene.borrow_mut().button_up().await;
+                }
+            },
         }
     }
 }
@@ -132,9 +200,17 @@ impl Scene for StartupScene {
 pub struct SniffingScene {}
 
 impl Scene for SniffingScene {
+    async fn button_down(&mut self) {
+        lights::change(lights::LightChange::White(true)).await;
+    }
+
+    async fn button_up(&mut self) {
+        lights::change(lights::LightChange::White(false)).await;
+    }
+
     async fn long_press(&mut self) {
         enter(CurrentScene::Menu(MenuScene {
-            currentOption: MenuOption::Sniff,
+            current: MenuOption::Sniff,
             is_on: true,
         }))
         .await;
@@ -146,7 +222,7 @@ impl Scene for SniffingScene {
 }
 
 #[derive(Clone, Debug)]
-enum MenuOption {
+pub enum MenuOption {
     Bluetooth,
     Sleep,
     Erase,
@@ -155,7 +231,7 @@ enum MenuOption {
 
 #[derive(Clone, Debug)]
 pub struct MenuScene {
-    pub currentOption: MenuOption,
+    pub current: MenuOption,
     is_on: bool,
 }
 
@@ -164,23 +240,26 @@ impl Scene for MenuScene {
         lights::off().await;
     }
 
-    async fn single_press(&mut self) {
-        match self.currentOption {
+    async fn button_press(&mut self) {
+        lights::off().await;
+
+        match self.current {
             MenuOption::Sniff => {
-                self.currentOption = MenuOption::Sleep;
-            }
-            MenuOption::Sleep => {
-                self.currentOption = MenuOption::Erase;
+                self.current = MenuOption::Erase;
             }
             MenuOption::Erase => {
-                self.currentOption = MenuOption::Bluetooth;
+                self.current = MenuOption::Sleep;
             }
-            MenuOption::Bluetooth => self.currentOption = MenuOption::Sniff,
+            MenuOption::Sleep => {
+                self.current = MenuOption::Bluetooth;
+            }
+
+            MenuOption::Bluetooth => self.current = MenuOption::Sniff,
         }
     }
 
     async fn tick(&mut self) {
-        match self.currentOption {
+        match self.current {
             MenuOption::Sniff => lights::change(lights::LightChange::White(self.is_on)).await,
             MenuOption::Sleep => lights::change(lights::LightChange::Green(self.is_on)).await,
             MenuOption::Erase => lights::change(lights::LightChange::Yellow(self.is_on)).await,

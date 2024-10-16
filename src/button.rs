@@ -9,9 +9,11 @@ use esp_println::println;
 use crate::lights;
 
 #[derive(Clone)]
-enum ButtonPress {
+pub enum ButtonPress {
     Single,
     Long,
+    Down,
+    Up,
 }
 
 pub static BUTTON_CHANNEL: PubSubChannel<CriticalSectionRawMutex, ButtonPress, 4, 4, 4> =
@@ -22,7 +24,7 @@ pub async fn button_task(mut button: Input<'static, GpioPin<17>>) {
     let publisher = BUTTON_CHANNEL.publisher().unwrap();
     loop {
         button.wait_for_rising_edge().await;
-        lights::change(lights::LightChange::White(true)).await;
+        publisher.publish(ButtonPress::Down).await;
 
         let mut is_long_press = true;
         for _ in 0..=200 {
@@ -34,7 +36,7 @@ pub async fn button_task(mut button: Input<'static, GpioPin<17>>) {
             Timer::after(Duration::from_millis(10)).await;
         }
 
-        lights::change(lights::LightChange::White(false)).await;
+        publisher.publish(ButtonPress::Up).await;
 
         if is_long_press {
             publisher.publish(ButtonPress::Long).await;
