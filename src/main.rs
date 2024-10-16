@@ -18,16 +18,19 @@
 
 mod battery;
 mod bluetooth;
+mod button;
 mod lights;
+mod scene;
 mod storage;
 mod wifi;
 
 extern crate alloc;
 
+use button::button_task;
 use embassy_time::{Duration, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
-use esp_hal::gpio::{GpioPin, Input, Io, Output, Pull};
+use esp_hal::gpio::{Input, Io, Output, Pull};
 use esp_hal::i2c::I2c;
 use esp_hal::ledc::Ledc;
 use esp_hal::prelude::*;
@@ -35,7 +38,8 @@ use esp_hal::rng::Rng;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::timer::AnyTimer;
 use esp_println::println;
-use lights::{battery_low, bluetooth_enabled, button_pressed, is_charging, setup_lights};
+use lights::setup_lights;
+use scene::setup_scene_manager;
 use wifi::start_wifi;
 
 #[esp_hal_embassy::main]
@@ -66,24 +70,12 @@ async fn main(spawner: embassy_executor::Spawner) {
         ))
         .ok();
 
-    Timer::after_millis(100).await;
-    bluetooth_enabled(true).await;
-    Timer::after_millis(100).await;
-    is_charging(true).await;
-    Timer::after_millis(100).await;
-    battery_low(true).await;
-    Timer::after_millis(100).await;
-    button_pressed(true).await;
-    Timer::after_millis(300).await;
-
     // storage::Store::reset();
 
     // MARK: Light task
 
-    battery_low(false).await;
-    bluetooth_enabled(false).await;
-    is_charging(false).await;
-    button_pressed(false).await;
+    // MARK -- Scene manager (UI as it were)
+    spawner.spawn(setup_scene_manager()).ok();
 
     let i2c0 = I2c::new_async(peripherals.I2C0, io.pins.gpio19, io.pins.gpio18, 400.kHz());
     println!("spawning battery task");
@@ -96,7 +88,6 @@ async fn main(spawner: embassy_executor::Spawner) {
     spawner.spawn(button_task(button)).unwrap();
 
     if button_is_high {
-        lights::bluetooth_enabled(true).await;
         spawner
             .spawn(bluetooth::start_bluetooth(
                 timer,
@@ -116,47 +107,9 @@ async fn main(spawner: embassy_executor::Spawner) {
             .unwrap();
     }
 
-    println!("We know about:");
-    storage::Store::new().dump();
+    spawner.spawn(storage::start_storage()).ok();
 
     loop {
         Timer::after(Duration::from_secs(10)).await;
-    }
-}
-
-#[embassy_executor::task]
-async fn button_task(mut button: Input<'static, GpioPin<17>>) {
-    loop {
-        button.wait_for_rising_edge().await;
-        button_pressed(true).await;
-
-        let mut is_long_press = true;
-        for _ in 0..=200 {
-            if button.is_low() {
-                is_long_press = false;
-                break;
-            }
-
-            Timer::after(Duration::from_millis(10)).await;
-        }
-
-        button_pressed(false).await;
-
-        if is_long_press {
-            println!("Is a long press");
-            // restart to put in bluetooth mode
-            // software_reset();
-
-            for _ in 0..=5 {
-                bluetooth_enabled(true).await;
-                Timer::after(Duration::from_millis(200)).await;
-                bluetooth_enabled(false).await;
-                Timer::after(Duration::from_millis(200)).await;
-            }
-        } else {
-            println!("Not a long press");
-        }
-
-        Timer::after(Duration::from_millis(100)).await;
     }
 }

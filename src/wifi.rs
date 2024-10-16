@@ -1,28 +1,19 @@
 use core::cell::RefCell;
 
-use bleps::{
-    ad_structure::{
-        create_advertising_data, AdStructure, BR_EDR_NOT_SUPPORTED, LE_GENERAL_DISCOVERABLE,
-    },
-    attribute_server::{AttributeServer, WorkResult},
-    gatt, Ble, HciConnector,
-};
+use embassy_futures::block_on;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, pubsub::PubSubChannel};
-use embassy_time::{Duration, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
 
 use alloc::{
     collections::btree_set::BTreeSet,
     string::{String, ToString},
-    vec::Vec,
 };
 use critical_section::Mutex;
 use esp_hal::{
-    peripherals::{BT, RADIO_CLK, WIFI},
+    peripherals::{RADIO_CLK, WIFI},
     reset::software_reset,
     rng::Rng,
-    time,
     timer::AnyTimer,
 };
 use esp_println::println;
@@ -69,11 +60,9 @@ pub async fn start_wifi(timer: AnyTimer, rng: Rng, radio_clock: RADIO_CLK, wifi:
 
                 if critical_section::with(|cs| {
                     if KNOWN_SSIDS.borrow_ref_mut(cs).insert(ssid.to_string()) && ssid.to_string() != "" {
-                        let mut storage = storage::Store::new();
                         let byte_string = ssid.to_string();
-                        println!("Found SSID: {:?}", byte_string);
                         let bytes = byte_string.as_bytes();
-                        let _ = storage.append(bytes);
+                        block_on(storage::append(bytes.to_vec()));
                         return true;
                     } else {
                         return false;
